@@ -17,20 +17,18 @@ struct Board
     mask row_[9]{};
     mask subSquare_[9]{};
 
-    Board()
+    Board(std::string sudoku)
     {
-        /*
-        Board generating algorithm
-        */
-
         // Naive, no validation yet
         for (int i = 0; i < 81; ++i)
         {
-            cell value = cells[i];
-
-            if (value == 0)
+            // First version, just to benchmark & test
+            if (sudoku[i] == '0')
+            {
                 continue;
-
+            }
+            cells[i] = static_cast<int>(sudoku[i]) - '0';
+            cell value = cells[i];
             std::uint16_t row = i / 9;
             std::uint16_t col = i % 9;
             std::uint16_t subSquare = (row / 3) * 3 + (col / 3);

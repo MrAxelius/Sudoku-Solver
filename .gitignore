@@ -1,4 +1,3 @@
-# --- Compilación ---
 build/
 *.exe
 benchmark-profile

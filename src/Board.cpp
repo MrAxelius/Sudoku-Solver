@@ -8,9 +8,16 @@ using mask = std::uint16_t;
 constexpr mask full = 0x3FE;
 constexpr mask empty = 0;
 
+struct emptyCounter
+{
+    std::uint32_t hi = 0; // 0 -- 63
+    std::uint64_t lo = 0; // 64 -- 80
+};
+
 struct Board
 {
     std::array<cell, 81> cells{};
+    emptyCounter emptyIndex;
 
     // Masks
     mask column_[9]{};
@@ -19,16 +26,24 @@ struct Board
 
     Board(std::string sudoku)
     {
-        // Naive, no validation yet
         for (int i = 0; i < 81; ++i)
         {
-            // First version, just to benchmark & test
             if (sudoku[i] == '0')
             {
+                if (i < 64)
+                {
+                    emptyIndex.lo |= (1ull << i);
+                }
+                else
+                {
+                    emptyIndex.hi |= (1u << (i - 64));
+                }
                 continue;
             }
+
             cells[i] = static_cast<int>(sudoku[i]) - '0';
             cell value = cells[i];
+
             std::uint16_t row = i / 9;
             std::uint16_t col = i % 9;
             std::uint16_t subSquare = (row / 3) * 3 + (col / 3);
@@ -58,31 +73,12 @@ struct Board
 
     bool checkEmpty(cell cellNumber) const
     {
-        // It's likely i'll add this as a precondition
-        // -----------------------------------------------
-        /*
-        if (cellNumber >= 81)
-        {
-            return false;
-        }
-        // -----------------------------------------------
-        */
         return cells[cellNumber] == 0;
     }
 
     bool clearCell(cell cellNumber)
     {
-        // It's likely i'll add this as a precondition
-        // -----------------------------------------------
-        if (cellNumber >= 81)
-        {
-            return false;
-        }
-        if (checkEmpty(cellNumber))
-        {
-            return true;
-        }
-        // -----------------------------------------------
+
         int old = cells[cellNumber];
         cells[cellNumber] = 0;
         auto masks = findRelevantMasks(cellNumber);
@@ -91,66 +87,21 @@ struct Board
         {
             *mask &= ~(1u << old);
         }
+        if (cellNumber < 64)
+        {
+            emptyIndex.lo |= (1ull << cellNumber);
+        }
+        else
+        {
+            emptyIndex.hi |= (1u << (cellNumber - 64));
+        }
         return true;
-    }
-
-    bool isColumnDone(cell columnNumber) const
-    {
-        // It's likely i'll add this as a precondition
-        // -----------------------------------------------
-        if (columnNumber > 8)
-        {
-            return false;
-        }
-        // -----------------------------------------------
-        // This is more robust than just == full
-        return ((column_[columnNumber] & full) == full);
-    }
-
-    bool isRowDone(cell rowNumber) const
-    {
-        // It's likely i'll add this as a precondition
-        // -----------------------------------------------
-        if (rowNumber > 8)
-        {
-            return false;
-        }
-        // -----------------------------------------------
-        // This is more robust than just == full
-        return ((row_[rowNumber] & full) == full);
-    }
-
-    bool isSubSquareDone(cell subSquareNumber) const
-    {
-        // It's likely i'll add this as a precondition
-        // -----------------------------------------------
-        if (subSquareNumber > 8)
-        {
-            return false;
-        }
-        // -----------------------------------------------
-        // This is more robust than just == full
-        return ((subSquare_[subSquareNumber] & full) == full);
     }
 
     bool modifyCell(cell cellNumber, cell newNumber)
     {
         if (cells[cellNumber] == newNumber)
             return true;
-
-        // It's likely i'll add all of this as a precondition
-        // -----------------------------------------------
-        // Check for a valid cell number
-        if (cellNumber >= 81)
-        {
-            return false;
-        }
-        // Check for a valid number
-        if (newNumber < 1 || newNumber > 9)
-        {
-            return false;
-        }
-        // -----------------------------------------------
 
         // Where is the cell
         std::uint16_t row = cellNumber / 9;
@@ -165,6 +116,16 @@ struct Board
             column_[col] |= bit;
             subSquare_[subSquare] |= bit;
             cells[cellNumber] = newNumber;
+
+            if (cellNumber < 64)
+            {
+                emptyIndex.lo &= ~(1ULL << cellNumber);
+            }
+            else
+            {
+                emptyIndex.hi &= ~(1ULL << (cellNumber - 64));
+            }
+
             return true;
         }
 
@@ -187,14 +148,22 @@ struct Board
         subSquare_[subSquare] |= bit;
 
         cells[cellNumber] = newNumber;
+
+        if (cellNumber < 64)
+            emptyIndex.lo &= ~(1ULL << cellNumber);
+        else
+            emptyIndex.hi &= ~(1ULL << (cellNumber - 64));
+
         return true;
     }
 
     std::array<mask *, 3> findRelevantMasks(cell cellNumber)
     {
-
-        return {&row_[cellNumber / 9], &column_[cellNumber % 9], &subSquare_[(cellNumber / 9) / 3 * 3 + ((cellNumber % 9) / 3)]};
+        std::int_fast8_t column = cellNumber % 9;
+        std::int_fast8_t row = cellNumber / 9;
+        return {&row_[row], &column_[column], &subSquare_[(row) / 3 * 3 + ((column) / 3)]};
     }
+
     bool isBoardComplete()
     {
         for (int i = 0; i <= 8; ++i)

@@ -9,11 +9,13 @@ using mask = std::uint16_t;
 
 struct Solver
 {
+    // benchmarking tool
     uint64_t counter = 0;
+    emptyCounter index;
     bool solve(Board &board)
     {
-        counter++;
-        auto emptyCell = findEmptyCell(board);
+        ++counter;
+        auto emptyCell = findBestCell(board);
         int index = emptyCell.first;
         mask mask_ = emptyCell.second;
         if (index == -2)
@@ -22,7 +24,7 @@ struct Solver
         }
         if (index == -1)
         {
-            return board.isBoardComplete();
+            return true;
         }
         mask lowestBit;
         while (mask_ != 0)
@@ -40,47 +42,74 @@ struct Solver
         return false;
     }
 
-    std::pair<int, mask> findEmptyCell(Board &board) const
+    std::pair<int, mask> findBestCell(Board &board)
     {
         int minCandidates = 10;
         int bestCell = -1;
-        for (std::int_fast8_t i = 0; i <= 80; ++i)
+        mask bestMask = 0;
+        auto emptyHi = board.emptyIndex.hi;
+        auto emptyLo = board.emptyIndex.lo;
+        mask candidates = 0;
+        int index = -1;
+
+        if (!emptyHi && !emptyLo)
         {
-            if (!board.checkEmpty(i))
+            return {-1, 0};
+        }
+
+        while (emptyHi != 0 || emptyLo != 0)
+        {
+            if (emptyLo != 0)
             {
-                continue;
+                index = std::countr_zero(emptyLo);
+                auto masks = board.findRelevantMasks(index);
+                candidates = full & ~(*masks[0] | *masks[1] | *masks[2]);
+                std::uint8_t numCandidates = std::popcount(candidates);
+
+                if (numCandidates == 0)
+                {
+                    return {-2, 0};
+                }
+                if (numCandidates == 1)
+                {
+                    return {index, candidates};
+                }
+                if (numCandidates < minCandidates)
+                {
+                    minCandidates = numCandidates;
+                    bestCell = index;
+                    bestMask = candidates;
+                }
+                emptyLo &= emptyLo - 1;
             }
-            auto masks = board.findRelevantMasks(i);
-            mask candidates = full & ~(*masks[0] | *masks[1] | *masks[2]);
-            uint8_t numberBits = std::popcount(candidates);
-            if (candidates == 0)
+            else if (emptyHi != 0)
             {
-                return {-2, 0};
-            }
-            if (numberBits == 1)
-            {
-                return {i, candidates};
-            }
-            if (numberBits < minCandidates && numberBits != 0)
-            {
-                minCandidates = numberBits;
-                bestCell = i;
+                index = std::countr_zero(emptyHi) + 64;
+                auto masks = board.findRelevantMasks(index);
+                candidates = full & ~(*masks[0] | *masks[1] | *masks[2]);
+                std::uint8_t numCandidates = std::popcount(candidates);
+
+                if (numCandidates == 0)
+                {
+                    return {-2, 0};
+                }
+                if (numCandidates == 1)
+                {
+                    return {index, candidates};
+                }
+                if (numCandidates < minCandidates)
+                {
+                    minCandidates = numCandidates;
+                    bestCell = index;
+                    bestMask = candidates;
+                }
+                emptyHi &= emptyHi - 1;
             }
         }
+
         if (bestCell == -1)
             return {-1, 0};
 
-        auto masks = board.findRelevantMasks(bestCell);
-        mask candidates = full & ~(*masks[0] | *masks[1] | *masks[2]);
-        return {bestCell, candidates};
-    }
-
-    bool canPlaceNumber(int cellIndex, cell number, Board &board)
-    {
-        const mask bit = static_cast<mask>(1u << number);
-        auto masks = board.findRelevantMasks(cellIndex);
-
-        return std::ranges::none_of(masks, [bit](mask *m)
-                                    { return *m & bit; });
+        return {bestCell, bestMask};
     }
 };

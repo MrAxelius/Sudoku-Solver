@@ -120,46 +120,39 @@ struct Generator
 {
     Solver solver;
     uint64_t counter = 0;
+    uint64_t lastPuzzleNodes = 0;
 
     bool fillBoard(Board &board, std::mt19937 &gen)
     {
         auto emptyHi = board.emptyIndex.hi;
         auto emptyLo = board.emptyIndex.lo;
-        int index;
         if (emptyHi == 0 && emptyLo == 0)
-        {
             return true;
-        }
-        if (emptyLo != 0)
-        {
-            index = std::countr_zero(emptyLo);
-        }
-        else
-        {
-            index = std::countr_zero(emptyHi) + 64;
-        }
+
+        int index = emptyLo ? std::countr_zero(emptyLo)
+                            : std::countr_zero(emptyHi) + 64;
+
         auto masks = board.findRelevantMasks(index);
         mask candidates = full & ~(*masks[0] | *masks[1] | *masks[2]);
-        if (candidates == 0)
-        {
-            return false;
-        }
-        int numCandidates = std::popcount(candidates);
 
-        std::uniform_int_distribution<int> dist(0, numCandidates - 1);
-        int randomCandidate = dist(gen);
-        for (int i = 0; i < randomCandidate; ++i)
+        while (candidates != 0)
         {
-            candidates &= (candidates - 1);
-        }
-        int chosenNumber = std::countr_zero(candidates);
-        board.modifyCell(index, chosenNumber);
+            const int numCandidates = std::popcount(candidates);
+            std::uniform_int_distribution<int> dist(0, numCandidates - 1);
+            int skip = dist(gen);
 
-        if (fillBoard(board, gen))
-        {
-            return true;
+            mask pick = candidates;
+            while (skip-- > 0)
+                pick &= (pick - 1);
+            const int chosenNumber = std::countr_zero(pick);
+
+            board.modifyCell(index, chosenNumber);
+            if (fillBoard(board, gen))
+                return true;
+            board.clearCell(index);
+
+            candidates &= ~(1u << chosenNumber);
         }
-        board.clearCell(index);
         return false;
     }
 
@@ -170,26 +163,21 @@ struct Generator
         int index = emptyCell.first;
         mask mask_ = emptyCell.second;
         if (index == -2)
-        {
             return false;
-        }
         if (index == -1)
         {
-            solutionsFound++;
+            ++solutionsFound;
             return solutionsFound >= limit;
         }
-        mask lowestBit;
         while (mask_ != 0)
         {
-            lowestBit = mask_ & (-mask_);
-            auto number = std::countr_zero(lowestBit);
+            const int number = std::countr_zero(mask_);
             board.modifyCell(index, number);
-            if (hasMultipleSolutions(board, solutionsFound, limit))
-            {
+            const bool found = hasMultipleSolutions(board, solutionsFound, limit);
+            board.clearCell(index); // SIEMPRE, antes de devolver
+            if (found)
                 return true;
-            }
-            board.clearCell(index);
-            mask_ = mask_ & (mask_ - 1);
+            mask_ &= mask_ - 1;
         }
         return false;
     }
@@ -199,25 +187,54 @@ struct Generator
         std::array<std::uint8_t, 81> cells;
         std::iota(cells.begin(), cells.end(), 0);
         std::shuffle(cells.begin(), cells.end(), gen);
-        int counter = 0;
-        while (targetHoles && counter <= 80)
+
+        int counter_ = 0;
+
+        while (targetHoles > 0 && counter_ <= 80)
         {
             int solutions = 0;
             int limit = 2;
-            int old = board.cells[cells[counter]];
-            board.clearCell(cells[counter]);
+            int old = board.cells[cells[counter_]];
+            board.clearCell(cells[counter_]);
+
             bool multiples = hasMultipleSolutions(board, solutions, limit);
 
             if (multiples || solutions != 1)
             {
-                board.modifyCell(cells[counter], old);
+                board.modifyCell(cells[counter_], old);
             }
             else
             {
                 --targetHoles;
             }
-            ++counter;
+            ++counter_;
         }
         return true;
+    }
+
+    bool generate(Board &board, std::mt19937 &gen, int targetNodes)
+    {
+        int actualNodes = 0;
+        int attempts = 0;
+        do
+        {
+            board.clearBoard();
+            if (!fillBoard(board, gen))
+            {
+                continue;
+            }
+            dig(board, gen, 55);
+            Board copy = board;
+            solver.counter = 0;
+            solver.solve(copy);
+            actualNodes = solver.counter;
+            ++attempts;
+        } while (actualNodes < targetNodes && attempts < 100);
+        lastPuzzleNodes = actualNodes;
+        if (actualNodes >= targetNodes)
+        {
+            return true;
+        }
+        return false;
     }
 };

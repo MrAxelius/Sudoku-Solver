@@ -1,3 +1,4 @@
+
 #include "../src/Solver.cpp"
 
 #include <algorithm>
@@ -5,8 +6,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
+
+using clk = std::chrono::steady_clock;
 
 template <class T>
 inline void escape(T *p)
@@ -14,220 +19,278 @@ inline void escape(T *p)
     asm volatile("" : : "g"(p) : "memory");
 }
 
-struct Result
+static volatile uint64_t g_sink = 0;
+
+
+struct Puzzle
 {
-    double ms;
-    bool solved;
-    uint64_t nodes;
-    bool nodesStable;
-    uint64_t checksum; // <-- NUEVO: Para forzar al compilador a ejecutar el solver
+    std::string name;
+    std::string cells; 
 };
 
-struct Statistics
+static std::vector<Puzzle> loadPuzzles(const std::string &path)
 {
-    double min;
-    double median;
-    double max;
-    double mean;
-    double p90;
-    double stddev;
-};
-
-
-static Result runOnce(const std::string &puzzle, int inner)
-{
-    double total = 0.0;
-    bool allOk = true;
-    bool stable = true;
-    uint64_t nodes = 0;
-    uint64_t totalChecksum = 0;
-
-    for (int i = 0; i < inner; ++i)
+    std::vector<Puzzle> out;
+    std::ifstream in(path);
+    if (!in)
     {
-        Board board(puzzle);
-        Solver solver;
-
-        // EL ENGAÑO: Le decimos al compilador que el tablero puede cambiar
-        escape(&board);
-
-        const auto t0 = std::chrono::steady_clock::now();
-        const bool ok = solver.solve(board);
-        const auto t1 = std::chrono::steady_clock::now();
-
-        total += std::chrono::duration<double, std::milli>(t1 - t0).count();
-        allOk &= ok;
-
-        // Consumimos los resultados para que el compilador no los ignore
-        totalChecksum += solver.counter;
-        totalChecksum += board.cells[0]; // Asumiendo que tienes un getter, o usa cells[0] si es público
-
-        if (i == 0)
-            nodes = solver.counter;
-        else
-            stable &= (solver.counter == nodes);
+        std::fprintf(stderr, "No se puede abrir '%s'\n", path.c_str());
+        return out;
     }
 
-    return {
-        total / inner,
-        allOk,
-        nodes,
-        stable,
-        totalChecksum // <-- NUEVO
-    };
-}
-
-static Statistics calculateStatistics(std::vector<double> values)
-{
-    std::sort(values.begin(), values.end());
-
-    const size_t count = values.size();
-
-    const double min = values.front();
-    const double max = values.back();
-
-    double median;
-
-    if (count % 2 == 0)
+    std::string line;
+    int lineNo = 0;
+    while (std::getline(in, line))
     {
-        median = (values[count / 2 - 1] + values[count / 2]) / 2.0;
-    }
-    else
-    {
-        median = values[count / 2];
-    }
+        ++lineNo;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+            line.pop_back();
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos)
+            continue;
+        line = line.substr(start);
 
-    double sum = 0.0;
+        if (line[0] == '#')
+            continue;
 
-    for (double value : values)
-        sum += value;
+        for (char &c : line)
+            if (c == '.')
+                c = '0';
 
-    const double mean = sum / count;
-
-    double squaredDifferences = 0.0;
-
-    for (double value : values)
-    {
-        const double difference = value - mean;
-        squaredDifferences += difference * difference;
-    }
-
-    const double stddev = count > 1
-                              ? std::sqrt(squaredDifferences / (count - 1))
-                              : 0.0;
-
-    // Percentil 90 mediante nearest-rank.
-    const size_t p90Index = static_cast<size_t>(std::ceil(0.90 * count)) - 1;
-
-    const double p90 = values[p90Index];
-
-    return {
-        min,
-        median,
-        max,
-        mean,
-        p90,
-        stddev};
-}
-
-int main()
-{
-    struct Case
-    {
-        const char *name;
-        std::string puzzle;
-        int inner;
-    };
-
-    constexpr int warmup = 3;
-    constexpr int reps = 50;
-    // ¡Ojo aquí! Si esto sigue siendo muy rápido, súbelo a 100000 o 500000
-    constexpr int resolutionsPerSample = 10000;
-
-    std::vector<Case> cases = {
-        {"hard",
-         "800000000003600000070090200050007000000045700000100030001000068008500010090000400",
-         resolutionsPerSample},
-        {"easy",
-         "004300209005009001070060043006002087190007400050083000600000105003508690042910300",
-         resolutionsPerSample}};
-
-    for (const auto &c : cases)
-    {
-        if (c.puzzle.size() != 81)
+        bool valid = line.size() == 81 &&
+                     std::all_of(line.begin(), line.end(), [](char c)
+                                 { return c >= '0' && c <= '9'; });
+        if (!valid)
         {
-            std::printf("%s: longitud %zu, se esperaban 81\n", c.name, c.puzzle.size());
+            std::fprintf(stderr, "%s:%d: linea invalida (se esperaban 81 digitos), ignorada\n",
+                         path.c_str(), lineNo);
             continue;
         }
 
-        // Warmup
-        for (int i = 0; i < warmup; ++i)
-            runOnce(c.puzzle, c.inner);
+        char name[32];
+        std::snprintf(name, sizeof(name), "#%02zu", out.size() + 1);
+        out.push_back({name, line});
+    }
+    return out;
+}
 
-        std::vector<double> times;
-        times.reserve(reps);
+static const char *const kPuzzles[] = {
+    "800000000003600000070090200050007000000045700000100030001000068008500010090000400", // Inkala 2012
+    "850002400720000009004000000000107002305000900040000000000080070017000000000036040",
+    "005300000800000020070010500400005300010070006003200080060500009004000030000009700",
+    "120040000005069010009000500000000070700052090030000002090600050400900801003000904",
+    "000570030100000020700023400000080004007004000490000605042000300000700900001800000",
+    "700152300000000920000300000100004708000000060000000000009000506040907000800006010",
+    "100007090030020008009600500005300900010080002600004000300000010040000007007000300",
+    "100034080000800500004060021018000000300102006000000810520070900006009000090640002",
+    "000920000006803000190070006230040100001000700008030029700080091000507200000064000",
+    "060504030100090008000000000900050006040602070700040005000000000400080001050203040",
+    "700000400020070080003008079900500300060020090001097006000300900030040060009001035",
+    "000070020800000006010205000905400008000000000300008501000302080400000009070060000",
+};
 
-        bool allOk = true;
-        bool stable = true;
-        uint64_t nodes = 0;
-        uint64_t finalChecksum = 0;
+static std::vector<Puzzle> embeddedPuzzles()
+{
+    std::vector<Puzzle> out;
+    for (const char *p : kPuzzles)
+    {
+        char name[32];
+        std::snprintf(name, sizeof(name), "#%02zu", out.size() + 1);
+        out.push_back({name, p});
+    }
+    return out;
+}
 
-        // Mediciones
-        for (int i = 0; i < reps; ++i)
+struct Statistics
+{
+    double min, median, max, mean, p90, stddev;
+};
+
+static Statistics calculateStatistics(std::vector<double> v)
+{
+    std::sort(v.begin(), v.end());
+    const size_t n = v.size();
+
+    const double median = (n % 2 == 0) ? (v[n / 2 - 1] + v[n / 2]) / 2.0 : v[n / 2];
+
+    double sum = 0.0;
+    for (double x : v)
+        sum += x;
+    const double mean = sum / n;
+
+    double sq = 0.0;
+    for (double x : v)
+        sq += (x - mean) * (x - mean);
+    const double stddev = n > 1 ? std::sqrt(sq / (n - 1)) : 0.0;
+
+    const size_t p90Index = static_cast<size_t>(std::ceil(0.90 * n)) - 1;
+
+    return {v.front(), median, v.back(), mean, v[p90Index], stddev};
+}
+
+struct Batch
+{
+    double ms;           
+    uint64_t totalNodes; 
+    int failures;        
+};
+
+static Batch runBatch(const Board &base, int inner)
+{
+    uint64_t totalNodes = 0, checksum = 0;
+    int failures = 0;
+
+    const auto t0 = clk::now();
+    for (int i = 0; i < inner; ++i)
+    {
+        Board board = base;
+        Solver solver;
+        escape(&board);
+        const bool ok = solver.solve(board);
+        escape(&board);
+        failures += !ok;
+        totalNodes += solver.counter;
+        checksum += board.cells[80];
+    }
+    const auto t1 = clk::now();
+
+    g_sink += checksum;
+    return {std::chrono::duration<double, std::milli>(t1 - t0).count(), totalNodes, failures};
+}
+
+static double measureOverheadMsPerIter(const Board &base)
+{
+    constexpr int N = 1 << 16;
+    double best = 1e30;
+    for (int rep = 0; rep < 7; ++rep)
+    {
+        uint64_t checksum = 0;
+        const auto t0 = clk::now();
+        for (int i = 0; i < N; ++i)
         {
-            const Result r = runOnce(c.puzzle, c.inner);
+            Board board = base;
+            Solver solver;
+            escape(&board);
+            escape(&solver);
+            checksum += board.cells[80] + solver.counter;
+        }
+        const auto t1 = clk::now();
+        g_sink += checksum;
+        best = std::min(best, std::chrono::duration<double, std::milli>(t1 - t0).count());
+    }
+    return best / N;
+}
 
-            times.push_back(r.ms);
-            allOk &= r.solved;
-            stable &= r.nodesStable;
-            finalChecksum += r.checksum; // <-- Acumulamos el checksum
+static int calibrateInner(const Board &base, double targetMs)
+{
+    int inner = 1;
+    for (;;)
+    {
+        const Batch b = runBatch(base, inner);
+        if (b.ms >= targetMs || inner >= (1 << 22))
+            return inner;
+        inner *= 2;
+    }
+}
 
-            if (i == 0)
-                nodes = r.nodes;
-            else
-                stable &= (r.nodes == nodes);
+static bool verifySolution(const std::string &puzzle, Board solved)
+{
+    for (int i = 0; i < 81; ++i)
+    {
+        const int v = solved.cells[i];
+        if (v < 1 || v > 9)
+            return false;
+        if (puzzle[i] != '0' && v != puzzle[i] - '0')
+            return false;
+    }
+    return solved.isBoardComplete();
+}
+
+int main(int argc, char **argv)
+{
+    const std::string path = argc > 1 ? argv[1] : "-"; // "-" = puzzles integrados
+    const int reps = argc > 2 ? std::max(3, std::atoi(argv[2])) : 30;
+    const double targetMs = argc > 3 ? std::max(1.0, std::atof(argv[3])) : 30.0;
+    constexpr int warmupBatches = 2;
+
+    const std::vector<Puzzle> puzzles = (path == "-") ? embeddedPuzzles() : loadPuzzles(path);
+    if (puzzles.empty())
+        return 2;
+
+#ifdef __VERSION__
+    std::printf("Compilador: %s\n", __VERSION__);
+#endif
+#ifndef __OPTIMIZE__
+    std::printf("AVISO: compilado SIN optimizacion (falta -O2/-O3). Los resultados no valen.\n");
+#endif
+    std::printf("Fichero: %s  (%zu puzzles)  muestras=%d  objetivo=%.0f ms/muestra\n\n",
+                (path == "-" ? "(integrado)" : path.c_str()), puzzles.size(), reps, targetMs);
+
+    std::printf("%-5s %8s %11s %11s %11s %7s %9s  %s\n",
+                "id", "nodos", "mediana us", "min us", "P90 us", "cv %", "ns/nodo", "estado");
+
+    double sumMedianMs = 0.0;
+    uint64_t sumNodes = 0;
+    bool allGood = true;
+
+    const double overheadMsPerIter = measureOverheadMsPerIter(Board(puzzles[0].cells));
+
+    for (const Puzzle &p : puzzles)
+    {
+        const Board base(p.cells);
+
+        Board once = base;
+        Solver s;
+        const bool ok = s.solve(once);
+        const uint64_t nodes = s.counter;
+        const bool correct = ok && verifySolution(p.cells, once);
+
+        const int inner = calibrateInner(base, targetMs);
+        for (int i = 0; i < warmupBatches; ++i)
+            runBatch(base, inner);
+
+        std::vector<double> perSolveMs;
+        perSolveMs.reserve(reps);
+        bool stable = true;
+        int failures = 0;
+        for (int r = 0; r < reps; ++r)
+        {
+            const Batch b = runBatch(base, inner);
+            failures += b.failures;
+            stable &= (b.totalNodes == nodes * static_cast<uint64_t>(inner));
+            perSolveMs.push_back(std::max(0.0, b.ms / inner - overheadMsPerIter));
         }
 
-        const Statistics stats = calculateStatistics(times);
+        const Statistics st = calculateStatistics(perSolveMs);
+        const double nsPerNode = nodes ? st.median * 1e6 / nodes : 0.0;
+        const double cv = st.mean > 0 ? 100.0 * st.stddev / st.mean : 0.0;
 
-        // Tiempo medio por resolución.
-        const double nsPerNode = nodes
-                                     ? stats.median * 1e6 / nodes
-                                     : 0.0;
+        const char *status = !correct          ? "SOLUCION INVALIDA"
+                             : failures        ? "FALLO"
+                             : !stable         ? "NODOS VARIABLES"
+                                               : "OK";
+        allGood &= (status[0] == 'O');
 
-        const double nodesPerSec = stats.median > 0.0
-                                       ? nodes / (stats.median / 1000.0)
-                                       : 0.0;
+        std::printf("%-5s %8llu %11.3f %11.3f %11.3f %7.2f %9.1f  %s\n",
+                    p.name.c_str(), static_cast<unsigned long long>(nodes),
+                    st.median * 1e3, st.min * 1e3, st.p90 * 1e3, cv, nsPerNode, status);
 
-        std::printf(
-            "%-8s min %.4f ms  mediana %.4f ms  max %.4f ms  %s\n",
-            c.name,
-            stats.min,
-            stats.median,
-            stats.max,
-            allOk ? "OK" : "FALLO");
-
-        std::printf(
-            "         nodos %llu  %.1f ns/nodo  %.2f Mnodos/s  %s\n",
-            static_cast<unsigned long long>(nodes),
-            nsPerNode,
-            nodesPerSec / 1e6,
-            stable ? "(nodos estables)" : "(NODOS VARIABLES: estado contaminado)");
-
-        std::printf(
-            "         muestras %d  resoluciones/muestra %d\n",
-            reps,
-            c.inner);
-            
-        std::printf(
-            "         checksum %llu (ignorar)\n",
-            static_cast<unsigned long long>(finalChecksum));
-
-        std::printf(
-            "         media %.4f ms  P90 %.4f ms  desviacion %.4f ms\n",
-            stats.mean,
-            stats.p90,
-            stats.stddev);
+        sumMedianMs += st.median;
+        sumNodes += nodes;
     }
 
-    return 0;
+    const double perSec = sumMedianMs > 0 ? puzzles.size() / (sumMedianMs / 1000.0) : 0.0;
+    const double nsPerNodeSet = sumNodes ? sumMedianMs * 1e6 / sumNodes : 0.0;
+
+    std::printf("\nCONJUNTO  %zu puzzles | %llu nodos | %.4f ms total | %.1f puzzles/s | %.1f ns/nodo\n",
+                puzzles.size(), static_cast<unsigned long long>(sumNodes),
+                sumMedianMs, perSec, nsPerNodeSet);
+
+    std::printf("\nFila para benchmark.md:\n");
+    std::printf("| <version> | %zu | %llu | %.4f | %.1f | %.1f |\n",
+                puzzles.size(), static_cast<unsigned long long>(sumNodes),
+                sumMedianMs, perSec, nsPerNodeSet);
+
+    std::printf("\n(checksum %llu, ignorar)\n", static_cast<unsigned long long>(g_sink));
+    return allGood ? 0 : 1;
 }

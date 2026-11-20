@@ -175,6 +175,16 @@ struct Board
         }
         return true;
     }
+
+    void clearBoard()
+    {
+        cells.fill(0);
+        std::fill(std::begin(row_), std::end(row_), 0);
+        std::fill(std::begin(column_), std::end(column_), 0);
+        std::fill(std::begin(subSquare_), std::end(subSquare_), 0);
+        emptyIndex.hi = 0x1FFFF;
+        emptyIndex.lo = ~0ULL;
+    }
 };
 
 /*

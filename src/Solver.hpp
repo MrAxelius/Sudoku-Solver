@@ -1,4 +1,6 @@
-#include "Board.cpp"
+#pragma once
+
+#include "Board.hpp"
 
 #include <cstdint>
 #include <algorithm>
@@ -221,6 +223,7 @@ struct Generator
             board.clearBoard();
             if (!fillBoard(board, gen))
             {
+                ++attempts;
                 continue;
             }
             dig(board, gen, 55);

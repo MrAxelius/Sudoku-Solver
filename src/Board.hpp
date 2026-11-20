@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cstdint>
 #include <iostream>
 #include <array>
@@ -23,7 +25,11 @@ struct Board
     mask column_[9]{};
     mask row_[9]{};
     mask subSquare_[9]{};
-
+    Board(){
+        for(int i = 0; i < 81; ++i){
+            this->cells[i] = 0;
+        }
+    }
     Board(std::string sudoku)
     {
         for (int i = 0; i < 81; ++i)
@@ -62,7 +68,7 @@ struct Board
         for (auto cell : cells)
         {
             ++count;
-            std::cout << cell << '|';
+            std::cout << static_cast<int>(cell) << '|';
             if (count % 9 == 0)
             {
                 count = 0;
